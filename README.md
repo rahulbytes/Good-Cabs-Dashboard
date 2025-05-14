@@ -10,6 +10,12 @@ Welcome to the **GoodCabs Dashboard** project! This repository contains the SQL 
 
 ---
 
+## 📊 Dashboard
+
+![Screenshot 2025-05-05 112221](https://github.com/user-attachments/assets/7468e074-bc34-4806-9e3c-609060af57db)
+
+---
+
 ## 📊 Dashboard Features
 
 The Power BI dashboard includes:
