@@ -1,0 +1,166 @@
+--ALL TABLE:
+SELECT * FROM city_target_passengers_rating LIMIT 5;
+SELECT * FROM dim_city LIMIT 5;
+SELECT * FROM dim_date LIMIT 5;
+SELECT * FROM dim_repeat_trip_distribution LIMIT 5;
+SELECT * FROM fact_passenger_summary LIMIT 5;
+SELECT * FROM fact_trips LIMIT 5;
+SELECT * FROM month_target_trips LIMIT 5;
+SELECT * FROM monthly_target_new_passengers LIMIT 5;
+
+--Business Reports:
+
+-- City lvl fair and trip summary report
+SELECT city_name, 
+COUNT(trip_id)AS Total_trips,
+(SUM(fare_amount)/COUNT(trip_id))AS Avg_fare_per_trip,
+(SUM(fare_amount)/SUM(distance_travelled_km))AS Avg_fare_per_km,
+ROUND(COUNT(trip_id)*100.0/(SELECT COUNT(trip_id)FROM fact_trips),2)AS percent_contri_to_total_trips
+FROM fact_trips AS ft 
+JOIN dim_city dc ON dc.city_id = ft.city_id
+GROUP BY city_name
+ORDER BY percent_contri_to_total_trips DESC;
+
+
+--Monthly city level trips target Performance Report
+WITH my_cte1 AS
+(SELECT dc.city_name AS city, TO_CHAR(mtt.month,'Month')AS Month, MAX(mtt.total_target_trips) AS target
+FROM month_target_trips mtt
+JOIN dim_city dc ON dc.city_id = mtt.city
+GROUP BY 1,2),
+
+my_cte2 AS
+(SELECT dc.city_name, TO_CHAR(ft.date,'Month')AS Month_name, COUNT(trip_id)AS actual_trips
+ FROM fact_trips ft
+ JOIN dim_city dc ON dc.city_id = ft.city_id
+ GROUP BY 1,2)
+ 
+SELECT c1.city, c1.Month, c1.target, c2.actual_trips,
+CASE WHEN c1.target <= c2.actual_trips THEN 'Target acheived' ELSE 'Below Target' END AS verdict,
+ROUND((c2.actual_trips - c1.target)*100.0/c1.target,2)AS performance_perc_gap
+FROM my_cte1 c1
+JOIN my_cte2 c2 ON c1.city = c2.city_name AND c1.Month = c2.Month_name 
+ORDER BY 1;
+
+--City lvl repeat trips passengers % report:
+SELECT dc.city_name,
+SUM(CASE WHEN trip_count = '2-Trips' THEN repeat_passenger_count ELSE 0 END)*100/SUM(repeat_passenger_count) AS Two_Trip,
+SUM(CASE WHEN trip_count = '3-Trips' THEN repeat_passenger_count ELSE 0 END)*100/SUM(repeat_passenger_count)  AS Third_Trip,
+SUM(CASE WHEN trip_count = '4-Trips' THEN repeat_passenger_count ELSE 0 END)*100/SUM(repeat_passenger_count)  AS Four_Trip,
+SUM(CASE WHEN trip_count = '5-Trips' THEN repeat_passenger_count ELSE 0 END)*100/SUM(repeat_passenger_count)  AS Five_Trip,
+SUM(CASE WHEN trip_count = '6-Trips' THEN repeat_passenger_count ELSE 0 END)*100/SUM(repeat_passenger_count)  AS Six_Trip,
+SUM(CASE WHEN trip_count = '7-Trips' THEN repeat_passenger_count ELSE 0 END)*100/SUM(repeat_passenger_count)  AS Seven_Trip,
+SUM(CASE WHEN trip_count = '8-Trips' THEN repeat_passenger_count ELSE 0 END)*100/SUM(repeat_passenger_count)  AS Eight_Trip,
+SUM(CASE WHEN trip_count = '9-Trips' THEN repeat_passenger_count ELSE 0 END)*100/SUM(repeat_passenger_count)  AS Nine_Trip,
+SUM(CASE WHEN trip_count = '10-Trips' THEN repeat_passenger_count ELSE 0 END)*100/SUM(repeat_passenger_count)  AS Ten_Trip
+FROM dim_repeat_trip_distribution drtd
+JOIN dim_city dc ON dc.city_id = drtd.city_id
+GROUP BY dc.city_name;
+
+--City with highest and lowest Total New passengers:
+WITH my_cte AS
+(SELECT dc.city_name, COUNT(trip_id)AS Num_of_new_passengers FROM fact_trips ft
+JOIN dim_city dc ON dc.city_id = ft.city_id
+WHERE ft.passenger_type = 'new'
+GROUP BY 1),
+
+rankings AS
+(SELECT city_name, Num_of_new_passengers,
+RANK()OVER(ORDER BY Num_of_new_passengers DESC)AS rankings_top,
+RANK()OVER(ORDER BY Num_of_new_passengers ASC)AS rankings_bottom
+FROM my_cte)
+
+SELECT city_name, Num_of_new_passengers, 
+CASE 
+WHEN rankings_top <=3 THEN 'Top 3'
+WHEN rankings_bottom <=3 THEN 'Bottom 3'
+END AS city_category
+FROM rankings
+WHERE rankings_top <=3 OR rankings_bottom <= 3
+ORDER BY Num_of_new_passengers DESC;
+
+--Identify the month with highest revenue for each city.
+WITH my_cte AS
+(SELECT dc.city_name, TO_CHAR(ft.date,'Month')AS High_rev_month, SUM(ft.fare_amount)AS Revenue,
+ SUM(SUM(ft.fare_amount))OVER(PARTITION BY dc.city_name)AS Total_rev_city_vise
+FROM fact_trips ft
+JOIN dim_city dc ON dc.city_id = ft.city_id
+GROUP BY city_name, High_rev_month),
+
+my_cte2 AS
+(SELECT city_name, high_rev_month, revenue,
+ ROUND(revenue*100.0/Total_rev_city_vise,2)AS percent_contri,
+RANK()OVER(PARTITION BY city_name ORDER BY revenue DESC)AS revenue_ranks
+FROM my_cte)
+
+SELECT city_name, high_rev_month, revenue,percent_contri FROM my_cte2
+WHERE revenue_ranks = 1;
+
+--Repeat Passenger Rate analysis:
+--Monthly and city wise:
+SELECT dc.city_name, TO_CHAR(fps.month,'Month')AS month_name,
+SUM(fps.total_passengers)AS total_passengers,
+SUM(fps.repeat_passengers)AS repeat_passengers, 
+ROUND(SUM(fps.repeat_passengers)*100.0/SUM(fps.total_passengers),2)AS repeat_passenger_rate
+FROM fact_passenger_summary fps
+JOIN dim_city dc ON dc.city_id = fps.city_id
+GROUP BY dc.city_name, fps.month
+ORDER BY dc.city_name,fps.month;
+
+--City wise:
+SELECT dc.city_name,
+SUM(fps.total_passengers)AS total_passengers,
+SUM(fps.repeat_passengers)AS repeat_passengers, 
+ROUND(SUM(fps.repeat_passengers)*100.0/SUM(fps.total_passengers),2)AS repeat_passenger_rate
+FROM fact_passenger_summary fps
+JOIN dim_city dc ON dc.city_id = fps.city_id
+GROUP BY dc.city_name;
+
+--Top and Bottom 3 performing cities as per total trips:
+WITH my_cte AS
+(SELECT dc.city_name, COUNT(ft.trip_id)AS Total_trips,
+RANK()OVER(ORDER BY COUNT(ft.trip_id)DESC)AS Ranking_Top,
+RANK()OVER(ORDER BY COUNT(ft.trip_id))AS Ranking_bottom
+FROM fact_trips ft
+JOIN dim_city dc ON dc.city_id = ft.city_id
+GROUP BY dc.city_name)
+
+SELECT city_name, total_trips,
+CASE WHEN ranking_top <= 3 THEN 'Top 3'
+WHEN ranking_bottom <= 3 THEN 'Bottom 3' ELSE 'Middle'
+END AS ranks_name
+FROM my_cte
+WHERE ranking_top <= 3 OR ranking_bottom <= 3
+ORDER BY total_trips DESC;
+
+--Avg fare per trip by city:
+SELECT dc.city_name, ROUND(AVG(fare_amount),2)AS avg_fare_amount, 
+ROUND(AVG(distance_travelled_km),2)AS avg_trips_km
+FROM fact_trips ft
+JOIN dim_city dc ON dc.city_id = ft.city_id
+GROUP BY dc.city_name;
+
+--Avg rating by city and passenger type:
+SELECT dc.city_name, 
+ROUND(AVG(CASE WHEN passenger_type = 'repeated' THEN (passenger_rating) END),2) AS avg_repeat_cust_rating,
+ROUND (AVG(CASE WHEN passenger_type = 'repeated' THEN (driver_rating) END),2) AS avg_repeat_driver_rating,
+ROUND (AVG(CASE WHEN passenger_type = 'new' THEN (passenger_rating)END),2) AS avg_new_cust_rating,
+ROUND (AVG(CASE WHEN passenger_type = 'new' THEN (driver_rating) END),2) AS avg_new_driver_rating
+FROM fact_trips ft 
+JOIN dim_city dc ON dc.city_id = ft.city_id
+GROUP BY dc.city_name;
+
+--Peak and low demand month by city:
+WITH my_cte1 AS
+(SELECT dc.city_name, TO_CHAR(ft.date,'MONTH')AS Month_name, COUNT(trip_id)AS total_trips,
+RANK()OVER(PARTITION BY city_name ORDER BY COUNT(trip_id)DESC)AS high_rank,
+RANK()OVER(PARTITION BY city_name ORDER BY COUNT(trip_id))AS low_rank
+FROM fact_trips ft
+JOIN dim_city dc ON dc.city_id = ft.city_id
+GROUP BY dc.city_name,Month_name
+)
+SELECT city_name, 
+CASE WHEN high_rank = 1 THEN month_name END AS high_demand_month,
+CASE WHEN low_rank = 1 THEN month_name END AS low_demand_month
+FROM my_cte1
+WHERE high_rank =1 OR low_rank = 1;
